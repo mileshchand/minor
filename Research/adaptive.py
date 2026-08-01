@@ -1,179 +1,69 @@
 """
-=========================================================
 adaptive.py
-
-Adaptive Modulation Controller
-
-Author : Ojaswi Chand
-
-Selects modulation scheme according to channel SNR.
-
-Thresholds:
-
-SNR < 5 dB        -> BPSK
-5 <= SNR < 10     -> QPSK
-10 <= SNR < 15    -> 16-QAM
-SNR >= 15         -> 64-QAM
-
-=========================================================
+-----------
+Adaptive modulation switching logic, based directly on "Table 1: Summary
+of Switching Levels" from the reference paper (also Table 2.1 in the
+project proposal). For a given target BER, the SNR (gamma, dB) of the
+current frame is mapped to a modulation scheme.
 """
 
 import numpy as np
 
-
-#########################################################
-# Default SNR Thresholds
-#########################################################
-
-DEFAULT_THRESHOLDS = {
-    "BPSK": 5,
-    "QPSK": 10,
-    "16QAM": 15
+# Switching thresholds copied from Table 1 (SNR ranges in dB)
+SWITCHING_LEVELS = {
+    0.1: [  # Target BER = 0.1  (10%)
+        (0, 2, "BPSK"),
+        (3, 7, "QPSK"),
+        (8, 14, "16QAM"),
+        (15, 40, "64QAM"),
+    ],
+    0.01: [  # Target BER = 0.01 (1%)
+        (0, 5, "BPSK"),
+        (6, 11, "QPSK"),
+        (12, 17, "16QAM"),
+        (18, 40, "64QAM"),
+    ],
+    0.001: [  # Target BER = 0.001 (0.1%)
+        (0, 7, "BPSK"),
+        (8, 13, "QPSK"),
+        (14, 19, "16QAM"),
+        (20, 40, "64QAM"),
+    ],
 }
 
+BPS = {"BPSK": 1, "QPSK": 2, "16QAM": 4, "64QAM": 6}
 
-#########################################################
-# Modulation Selection
-#########################################################
 
-def choose_modulation(snr_db):
+def select_modulation(snr_db, target_ber=0.001):
     """
-    Select modulation based on SNR.
-
-    Parameters
-    ----------
-    snr_db : float
-
-    Returns
-    -------
-    str
-        "BPSK"
-        "QPSK"
-        "16QAM"
-        "64QAM"
+    Select the modulation scheme for the given channel SNR (dB) and
+    target BER, using the switching table (Table 1 / Table 2.1).
+    SNR values below 0 use BPSK; above 40 use 64QAM (edge handling).
     """
+    if target_ber not in SWITCHING_LEVELS:
+        raise ValueError(f"target_ber must be one of {list(SWITCHING_LEVELS)}")
 
-    if snr_db < DEFAULT_THRESHOLDS["BPSK"]:
+    levels = SWITCHING_LEVELS[target_ber]
 
-        return "BPSK"
+    if snr_db < levels[0][0]:
+        return levels[0][2]
+    if snr_db > levels[-1][1]:
+        return levels[-1][2]
 
-    elif snr_db < DEFAULT_THRESHOLDS["QPSK"]:
+    for low, high, scheme in levels:
+        if low <= snr_db <= high:
+            return scheme
 
-        return "QPSK"
-
-    elif snr_db < DEFAULT_THRESHOLDS["16QAM"]:
-
-        return "16QAM"
-
-    else:
-
-        return "64QAM"
-
-
-#########################################################
-# Bits Per Symbol
-#########################################################
-
-def bits_per_symbol(modulation):
-    """
-    Return bits carried by one symbol.
-    """
-
-    table = {
-        "BPSK": 1,
-        "QPSK": 2,
-        "16QAM": 4,
-        "64QAM": 6
-    }
-
-    if modulation not in table:
-        raise ValueError(f"Unknown modulation: {modulation}")
-
-    return table[modulation]
+    # Fallback (shouldn't happen given contiguous ranges)
+    return levels[-1][2]
 
 
-#########################################################
-# Spectral Efficiency
-#########################################################
-
-def spectral_efficiency(modulation):
-    """
-    Spectral efficiency (bits/symbol).
-
-    For M-ary modulation:
-        η = log2(M)
-    """
-
-    return bits_per_symbol(modulation)
+def throughput_bps(scheme):
+    """Bits-per-symbol (throughput) for a given modulation scheme."""
+    return BPS[scheme]
 
 
-#########################################################
-# Throughput
-#########################################################
-
-def calculate_throughput(bit_rate, ber):
-    """
-    Effective throughput.
-
-    Throughput = Bit Rate × (1 − BER)
-    """
-
-    return bit_rate * (1.0 - ber)
-
-
-#########################################################
-# Modulation Summary
-#########################################################
-
-def modulation_summary(snr_db):
-    """
-    Return modulation information as a dictionary.
-    """
-
-    mod = choose_modulation(snr_db)
-
-    return {
-        "snr": snr_db,
-        "modulation": mod,
-        "bits_per_symbol": bits_per_symbol(mod),
-        "spectral_efficiency": spectral_efficiency(mod)
-    }
-
-
-#########################################################
-# Print Decision Table
-#########################################################
-
-def print_thresholds():
-    """
-    Display adaptive switching thresholds.
-    """
-
-    print("\nAdaptive Modulation Thresholds")
-    print("--------------------------------")
-    print("SNR < 5 dB        -> BPSK")
-    print("5 <= SNR < 10 dB -> QPSK")
-    print("10 <= SNR < 15 dB -> 16-QAM")
-    print("SNR >= 15 dB      -> 64-QAM")
-    print("--------------------------------")
-
-
-#########################################################
-# Test
-#########################################################
-
-if __name__ == "__main__":
-
-    print_thresholds()
-
-    print()
-
-    for snr in range(0, 21):
-
-        info = modulation_summary(snr)
-
-        print(
-            f"SNR = {snr:2d} dB | "
-            f"{info['modulation']:6s} | "
-            f"{info['bits_per_symbol']} bits/symbol"
-        )
+def adaptive_bps_curve(snr_db_range, target_ber=0.001):
+    """BPS throughput of the adaptive modem across an SNR range (Fig. 4)."""
+    schemes = [select_modulation(s, target_ber) for s in snr_db_range]
+    return np.array([throughput_bps(s) for s in schemes]), schemes
