@@ -1,151 +1,43 @@
 """
-=========================================================
 channel.py
+----------
+AWGN channel model: r(t) = s(t) + n(t)   (Eq. 2.1 of the proposal)
 
-Wireless Channel Models
-
-Contains:
-    • AWGN Channel
-    • Rayleigh Fading Channel
-=========================================================
+add_awgn_noise() adds complex Gaussian noise to a stream of unit-energy
+symbols so that the resulting Eb/N0 / SNR matches the requested value,
+scaled by bits-per-symbol so that BER vs SNR curves line up with the
+theoretical formulas (Eq. 1.1 - 1.4), which are expressed in terms of
+average SNR per symbol (gamma).
 """
 
 import numpy as np
 
 
-#########################################################
-# Utility Function
-#########################################################
-
-def calculate_noise_variance(signal, snr_db):
+def add_awgn_noise(symbols, snr_db):
     """
-    Calculate the noise variance for a given SNR.
+    Add AWGN to complex symbols for a given average SNR (dB) per symbol.
 
-    Parameters
-    ----------
-    signal : ndarray
-        Transmitted symbols.
+    symbols  : complex ndarray, unit average energy per symbol
+    snr_db   : desired average SNR (gamma) in dB
 
-    snr_db : float
-        Signal-to-noise ratio in dB.
-
-    Returns
-    -------
-    float
-        Noise variance.
+    Returns noisy complex symbols.
     """
+    snr_linear = 10 ** (snr_db / 10.0)
+    # Average symbol energy is assumed to be 1 (modulators normalize this)
+    noise_power = 1.0 / snr_linear
+    noise_std = np.sqrt(noise_power / 2.0)  # split between I and Q
 
-    signal_power = np.mean(np.abs(signal) ** 2)
-
-    snr_linear = 10 ** (snr_db / 10)
-
-    noise_variance = signal_power / snr_linear
-
-    return noise_variance
+    noise = noise_std * (np.random.randn(*symbols.shape) +
+                          1j * np.random.randn(*symbols.shape))
+    return symbols + noise
 
 
-#########################################################
-# AWGN Channel
-#########################################################
-
-def awgn_channel(signal, snr_db):
+def estimate_channel_snr(true_snr_db, estimation_noise_std=0.0):
     """
-    Add Additive White Gaussian Noise (AWGN)
+    Simulate SNR estimation/feedback from receiver to transmitter.
+    In an ideal system estimation_noise_std=0 gives perfect feedback;
+    a nonzero value can be used to study feedback-error robustness.
     """
-
-    noise_variance = calculate_noise_variance(signal, snr_db)
-
-    if np.iscomplexobj(signal):
-
-        noise = (
-            np.sqrt(noise_variance / 2)
-            * (np.random.randn(*signal.shape)
-               + 1j * np.random.randn(*signal.shape))
-        )
-
-    else:
-
-        noise = (
-            np.sqrt(noise_variance)
-            * np.random.randn(*signal.shape)
-        )
-
-    received = signal + noise
-
-    return received
-
-
-#########################################################
-# Rayleigh Channel
-#########################################################
-
-def rayleigh_channel(signal, snr_db):
-    """
-    Flat Rayleigh fading channel followed by AWGN.
-    """
-
-    h = (
-        np.random.randn(*signal.shape)
-        + 1j * np.random.randn(*signal.shape)
-    ) / np.sqrt(2)
-
-    faded_signal = h * signal
-
-    noise_variance = calculate_noise_variance(faded_signal, snr_db)
-
-    noise = (
-        np.sqrt(noise_variance / 2)
-        * (np.random.randn(*signal.shape)
-           + 1j * np.random.randn(*signal.shape))
-    )
-
-    received = faded_signal + noise
-
-    # Perfect channel estimation (equalization)
-    received = received / h
-
-    return received
-
-
-#########################################################
-# SNR Measurement
-#########################################################
-
-def estimate_snr(tx_signal, rx_signal):
-    """
-    Estimate SNR from transmitted and received signals.
-    """
-
-    signal_power = np.mean(np.abs(tx_signal) ** 2)
-
-    noise = rx_signal - tx_signal
-
-    noise_power = np.mean(np.abs(noise) ** 2)
-
-    snr = signal_power / noise_power
-
-    return 10 * np.log10(snr)
-
-
-#########################################################
-# Channel Test
-#########################################################
-
-if __name__ == "__main__":
-
-    np.random.seed(0)
-
-    tx = np.random.choice([-1, 1], 10000)
-
-    snr = 10
-
-    rx = awgn_channel(tx, snr)
-
-    est = estimate_snr(tx, rx)
-
-    print("Requested SNR :", snr, "dB")
-    print("Estimated SNR :", round(est, 2), "dB")
-
-    rx_rayleigh = rayleigh_channel(tx.astype(complex), snr)
-
-    print("Rayleigh channel test completed.")
+    if estimation_noise_std == 0.0:
+        return true_snr_db
+    return true_snr_db + np.random.normal(0, estimation_noise_std)
