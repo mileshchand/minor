@@ -1,446 +1,148 @@
 """
-=========================================================
 modulation.py
+-------------
+Modulator / demodulator implementations for the four schemes used in the
+adaptive modem: BPSK, QPSK, 16-QAM and 64-QAM.
 
-Adaptive Modulation Module
+Each scheme provides:
+    modulate(bits)   -> complex baseband symbols (unit average energy)
+    demodulate(symbols) -> recovered bits (hard decision)
 
-Contains:
-    • BPSK
-    • QPSK
-    • (16-QAM and 64-QAM added in Part 2)
-
-=========================================================
+Bits-per-symbol matches Table 1 / Table 2.1 of the reference material:
+    BPSK  : 1 bit/symbol
+    QPSK  : 2 bits/symbol
+    16QAM : 4 bits/symbol
+    64QAM : 6 bits/symbol
 """
 
 import numpy as np
 
-#########################################################
-# Utility Functions
-#########################################################
-
-def pad_bits(bits, bits_per_symbol):
-    """
-    Pad bit array with zeros so that its length is a multiple
-    of bits_per_symbol.
-    """
-    bits = np.asarray(bits, dtype=np.uint8)
-
-    remainder = len(bits) % bits_per_symbol
-
-    if remainder != 0:
-        padding = bits_per_symbol - remainder
-        bits = np.concatenate(
-            [bits, np.zeros(padding, dtype=np.uint8)]
-        )
-
-    return bits
+BITS_PER_SYMBOL = {"BPSK": 1, "QPSK": 2, "16QAM": 4, "64QAM": 6}
 
 
-#########################################################
-# BPSK
-#########################################################
-
-def bpsk_mod(bits):
-    """
-    BPSK Mapping
-
-    0 -> -1
-    1 -> +1
-    """
-
-    bits = np.asarray(bits, dtype=np.uint8)
-
-    symbols = 2 * bits - 1
-
-    return symbols.astype(float)
+# ----------------------------- BPSK -----------------------------------
+def bpsk_modulate(bits):
+    return np.where(bits == 0, -1.0, 1.0).astype(complex)
 
 
-def bpsk_demod(received):
-    """
-    BPSK Demodulation
-    """
-
-    bits = (received >= 0).astype(np.uint8)
-
-    return bits
+def bpsk_demodulate(symbols):
+    return (np.real(symbols) >= 0).astype(np.uint8)
 
 
-#########################################################
-# QPSK
-#########################################################
-
-def qpsk_mod(bits):
-    """
-    Gray-coded QPSK
-
-    00 -> -1 -1j
-    01 -> -1 +1j
-    11 -> +1 +1j
-    10 -> +1 -1j
-    """
-
-    bits = pad_bits(bits, 2)
-
-    bits = bits.reshape((-1, 2))
-
-    symbols = []
-
-    for b0, b1 in bits:
-
-        if (b0, b1) == (0, 0):
-            s = -1 - 1j
-
-        elif (b0, b1) == (0, 1):
-            s = -1 + 1j
-
-        elif (b0, b1) == (1, 1):
-            s = 1 + 1j
-
-        else:
-            s = 1 - 1j
-
-        symbols.append(s)
-
-    symbols = np.array(symbols)
-
-    # Normalize power
-    symbols = symbols / np.sqrt(2)
-
+# ----------------------------- QPSK -----------------------------------
+def qpsk_modulate(bits):
+    bits = bits.reshape(-1, 2)
+    i = np.where(bits[:, 0] == 0, -1.0, 1.0)
+    q = np.where(bits[:, 1] == 0, -1.0, 1.0)
+    symbols = (i + 1j * q) / np.sqrt(2)
     return symbols
 
 
-def qpsk_demod(received):
+def qpsk_demodulate(symbols):
+    i_bits = (np.real(symbols) >= 0).astype(np.uint8)
+    q_bits = (np.imag(symbols) >= 0).astype(np.uint8)
+    return np.column_stack([i_bits, q_bits]).reshape(-1)
+
+
+# ----------------------------- 16-QAM ----------------------------------
+def _gray_pam_levels(bits_per_dim, k):
+    """Generate Gray-coded PAM levels for k bits per I or Q dimension."""
+    m = 2 ** k
+    levels = np.arange(-(m - 1), m, 2)  # e.g. k=2 -> [-3,-1,1,3]
+    return levels
+
+
+def _bits_to_gray_index(bits_group):
+    """Convert a group of bits (Gray-coded) to PAM level index."""
+    n = len(bits_group)
+    gray = 0
+    for b in bits_group:
+        gray = (gray << 1) | int(b)
+    # Gray -> binary
+    binary = gray
+    mask = binary >> 1
+    while mask != 0:
+        binary ^= mask
+        mask >>= 1
+    return binary
+
+
+def _index_to_gray_bits(index, n):
+    binary = index
+    gray = binary ^ (binary >> 1)
+    return [(gray >> (n - 1 - i)) & 1 for i in range(n)]
+
+
+def qam_modulate(bits, k_total):
     """
-    Gray-coded QPSK Demodulator
+    General square-QAM modulator using Gray coding per dimension.
+    k_total: total bits per symbol (4 for 16QAM, 6 for 64QAM)
     """
+    k_dim = k_total // 2  # bits per I or Q dimension
+    levels = _gray_pam_levels(k_dim, k_dim)
+    bits = bits.reshape(-1, k_total)
+    i_bits = bits[:, :k_dim]
+    q_bits = bits[:, k_dim:]
 
-    received = received * np.sqrt(2)
+    i_idx = np.array([_bits_to_gray_index(row) for row in i_bits])
+    q_idx = np.array([_bits_to_gray_index(row) for row in q_bits])
 
-    bits = []
+    i_val = levels[i_idx]
+    q_val = levels[q_idx]
 
-    for s in received:
-
-        i = s.real
-        q = s.imag
-
-        if i < 0 and q < 0:
-
-            bits.extend([0, 0])
-
-        elif i < 0 and q >= 0:
-
-            bits.extend([0, 1])
-
-        elif i >= 0 and q >= 0:
-
-            bits.extend([1, 1])
-
-        else:
-
-            bits.extend([1, 0])
-
-    return np.array(bits, dtype=np.uint8)
-
-
-#########################################################
-# Average Symbol Energy
-#########################################################
-
-def average_symbol_energy(symbols):
-    """
-    Compute average symbol energy.
-    """
-
-    return np.mean(np.abs(symbols) ** 2)
-
-
-#########################################################
-# Symbol Power
-#########################################################
-
-def normalize(symbols):
-    """
-    Normalize average symbol power to 1.
-    """
-
-    energy = average_symbol_energy(symbols)
-
-    return symbols / np.sqrt(energy)
-
-
-#########################################################
-# Test Module
-#########################################################
-
-if __name__ == "__main__":
-
-    np.random.seed(0)
-
-    bits = np.random.randint(0, 2, 20)
-
-    print("Original Bits")
-    print(bits)
-
-    print("\n----- BPSK -----")
-
-    s = bpsk_mod(bits)
-
-    r = bpsk_demod(s)
-
-    print("Recovered Correctly:",
-          np.array_equal(bits, r[:len(bits)]))
-
-    print("\n----- QPSK -----")
-
-    s = qpsk_mod(bits)
-
-    r = qpsk_demod(s)
-
-    print("Recovered Correctly:",
-          np.array_equal(bits, r[:len(bits)]))
-
-    #########################################################
-# 16-QAM (Gray Coded)
-#########################################################
-
-# Gray-coded amplitude mapping
-# Bits -> Level
-# 00 -> -3
-# 01 -> -1
-# 11 -> +1
-# 10 -> +3
-
-_gray_to_level_16 = {
-    (0, 0): -3,
-    (0, 1): -1,
-    (1, 1):  1,
-    (1, 0):  3
-}
-
-_level_to_gray_16 = {
-    -3: (0, 0),
-    -1: (0, 1),
-     1: (1, 1),
-     3: (1, 0)
-}
-
-
-def qam16_mod(bits):
-    """
-    Gray-coded 16-QAM Modulator
-
-    Every symbol contains 4 bits:
-        b0 b1 -> I
-        b2 b3 -> Q
-    """
-
-    bits = pad_bits(bits, 4)
-
-    bits = bits.reshape((-1, 4))
-
-    symbols = []
-
-    for b in bits:
-
-        i_bits = (b[0], b[1])
-        q_bits = (b[2], b[3])
-
-        i = _gray_to_level_16[i_bits]
-        q = _gray_to_level_16[q_bits]
-
-        symbols.append(complex(i, q))
-
-    symbols = np.array(symbols)
-
-    # Normalize average symbol energy
-    symbols = symbols / np.sqrt(10)
-
+    symbols = (i_val + 1j * q_val).astype(complex)
+    # Normalize to unit average energy
+    avg_energy = np.mean(levels.astype(float) ** 2) * 2
+    symbols /= np.sqrt(avg_energy)
     return symbols
 
 
-def qam16_demod(received):
-    """
-    Gray-coded 16-QAM Demodulator
-    """
+def qam_demodulate(symbols, k_total):
+    k_dim = k_total // 2
+    levels = _gray_pam_levels(k_dim, k_dim)
+    avg_energy = np.mean(levels.astype(float) ** 2) * 2
+    scale = np.sqrt(avg_energy)
 
-    received = received * np.sqrt(10)
+    i_val = np.real(symbols) * scale
+    q_val = np.imag(symbols) * scale
 
-    bits = []
+    def nearest_index(vals):
+        vals = vals.reshape(-1, 1)
+        dist = np.abs(vals - levels.reshape(1, -1))
+        return np.argmin(dist, axis=1)
 
-    for s in received:
+    i_idx = nearest_index(i_val)
+    q_idx = nearest_index(q_val)
 
-        i = s.real
-        q = s.imag
+    i_bits = np.array([_index_to_gray_bits(idx, k_dim) for idx in i_idx])
+    q_bits = np.array([_index_to_gray_bits(idx, k_dim) for idx in q_idx])
 
-        #############################
-        # Decision on I component
-        #############################
-
-        if i < -2:
-            i_level = -3
-
-        elif i < 0:
-            i_level = -1
-
-        elif i < 2:
-            i_level = 1
-
-        else:
-            i_level = 3
-
-        #############################
-        # Decision on Q component
-        #############################
-
-        if q < -2:
-            q_level = -3
-
-        elif q < 0:
-            q_level = -1
-
-        elif q < 2:
-            q_level = 1
-
-        else:
-            q_level = 3
-
-        bits.extend(_level_to_gray_16[i_level])
-        bits.extend(_level_to_gray_16[q_level])
-
-    return np.array(bits, dtype=np.uint8)
+    bits = np.concatenate([i_bits, q_bits], axis=1)
+    return bits.reshape(-1).astype(np.uint8)
 
 
-#########################################################
-# Test 16-QAM
-#########################################################
-
-if __name__ == "__main__":
-
-    np.random.seed(42)
-
-    bits = np.random.randint(0, 2, 40)
-
-    tx = qam16_mod(bits)
-
-    rx = qam16_demod(tx)
-
-    print("\n----- 16-QAM -----")
-    print("Recovered Correctly:",
-          np.array_equal(bits, rx[:len(bits)]))
-
-    #########################################################
-# 64-QAM (Gray Coded)
-#########################################################
-
-# Gray coding (3 bits -> amplitude)
-#
-# Bits      Level
-# 000  ->   -7
-# 001  ->   -5
-# 011  ->   -3
-# 010  ->   -1
-# 110  ->    1
-# 111  ->    3
-# 101  ->    5
-# 100  ->    7
-
-_gray_to_level_64 = {
-    (0,0,0): -7,
-    (0,0,1): -5,
-    (0,1,1): -3,
-    (0,1,0): -1,
-    (1,1,0):  1,
-    (1,1,1):  3,
-    (1,0,1):  5,
-    (1,0,0):  7
-}
-
-_level_to_gray_64 = {
-    -7:(0,0,0),
-    -5:(0,0,1),
-    -3:(0,1,1),
-    -1:(0,1,0),
-     1:(1,1,0),
-     3:(1,1,1),
-     5:(1,0,1),
-     7:(1,0,0)
-}
+# --------------------------- Dispatch table -----------------------------
+def modulate(scheme, bits):
+    if scheme == "BPSK":
+        return bpsk_modulate(bits)
+    elif scheme == "QPSK":
+        return qpsk_modulate(bits)
+    elif scheme == "16QAM":
+        return qam_modulate(bits, 4)
+    elif scheme == "64QAM":
+        return qam_modulate(bits, 6)
+    else:
+        raise ValueError(f"Unknown modulation scheme: {scheme}")
 
 
-def qam64_mod(bits):
-    """
-    Gray-coded 64-QAM Modulator
-
-    Every symbol contains 6 bits
-
-    First 3 bits -> I component
-    Last 3 bits  -> Q component
-    """
-
-    bits = pad_bits(bits, 6)
-
-    bits = bits.reshape((-1, 6))
-
-    symbols = []
-
-    for b in bits:
-
-        i_bits = tuple(b[:3])
-        q_bits = tuple(b[3:])
-
-        i = _gray_to_level_64[i_bits]
-        q = _gray_to_level_64[q_bits]
-
-        symbols.append(complex(i, q))
-
-    symbols = np.array(symbols)
-
-    # Average symbol energy = 42
-    symbols = symbols / np.sqrt(42)
-
-    return symbols
-
-
-def qam64_demod(received):
-    """
-    Gray-coded 64-QAM Demodulator
-    """
-
-    received = received * np.sqrt(42)
-
-    bits = []
-
-    levels = np.array([-7,-5,-3,-1,1,3,5,7])
-
-    for s in received:
-
-        i = s.real
-        q = s.imag
-
-        # Nearest neighbour decision
-        i_level = levels[np.argmin(np.abs(levels - i))]
-        q_level = levels[np.argmin(np.abs(levels - q))]
-
-        bits.extend(_level_to_gray_64[int(i_level)])
-        bits.extend(_level_to_gray_64[int(q_level)])
-
-    return np.array(bits, dtype=np.uint8)
-
-
-#########################################################
-# 64-QAM TEST
-#########################################################
-
-if __name__ == "__main__":
-
-    np.random.seed(0)
-
-    bits = np.random.randint(0,2,120)
-
-    tx = qam64_mod(bits)
-
-    rx = qam64_demod(tx)
-
-    print("\n-----64-QAM-----")
-    print("Recovered Correctly:",
-          np.array_equal(bits, rx[:len(bits)]))
+def demodulate(scheme, symbols):
+    if scheme == "BPSK":
+        return bpsk_demodulate(symbols)
+    elif scheme == "QPSK":
+        return qpsk_demodulate(symbols)
+    elif scheme == "16QAM":
+        return qam_demodulate(symbols, 4)
+    elif scheme == "64QAM":
+        return qam_demodulate(symbols, 6)
+    else:
+        raise ValueError(f"Unknown modulation scheme: {scheme}")
