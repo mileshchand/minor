@@ -1,254 +1,65 @@
 """
-=========================================================
 utils.py
-
-Utility Functions
-
-
-Contains helper functions used throughout the project.
-=========================================================
+--------
+Common helper functions used across the adaptive modem project:
+- Gaussian Q-function
+- MSE / PSNR calculation (Eq. 4.1, 4.2 in reference paper)
+- Bit <-> byte helpers for image encoding
 """
 
 import numpy as np
-import random
-import time
+from scipy.special import erfc
 
 
-#########################################################
-# Random Seed
-#########################################################
-
-def set_seed(seed=42):
+def qfunc(x):
     """
-    Set random seed for reproducible simulations.
+    Gaussian Q-function: Q(x) = 0.5 * erfc(x / sqrt(2))
+    Used in all theoretical BER expressions (Eq. 1.1 - 1.4).
     """
+    x = np.asarray(x, dtype=float)
+    return 0.5 * erfc(x / np.sqrt(2))
 
-    np.random.seed(seed)
-    random.seed(seed)
 
-
-#########################################################
-# Linear SNR
-#########################################################
-
-def db_to_linear(db):
+def compute_mse(original, received):
     """
-    Convert dB to linear scale.
+    Mean Square Error between original and received image (Eq. 4.1).
+    MSE = sum((Xij - Xij')^2) / (M*N)
     """
+    original = original.astype(np.float64)
+    received = received.astype(np.float64)
+    return np.mean((original - received) ** 2)
 
-    return 10 ** (db / 10)
 
-
-#########################################################
-# dB Scale
-#########################################################
-
-def linear_to_db(value):
+def compute_psnr(original, received, max_val=255.0):
     """
-    Convert linear value to dB.
+    Peak Signal-to-Noise Ratio (Eq. 4.2).
+    PSNR = 10 * log10(255^2 / MSE)
+    Returns a large finite value instead of inf when MSE == 0.
     """
-
-    return 10 * np.log10(value)
-
-
-#########################################################
-# Signal Power
-#########################################################
-
-def signal_power(signal):
-    """
-    Average signal power.
-    """
-
-    signal = np.asarray(signal)
-
-    return np.mean(np.abs(signal) ** 2)
-
-
-#########################################################
-# Normalize Signal
-#########################################################
-
-def normalize_signal(signal):
-    """
-    Normalize average signal power to one.
-    """
-
-    power = signal_power(signal)
-
-    if power == 0:
-        return signal
-
-    return signal / np.sqrt(power)
-
-
-#########################################################
-# Padding Bits
-#########################################################
-
-def pad_bits(bits, bits_per_symbol):
-    """
-    Pad bitstream with zeros.
-    """
-
-    bits = np.asarray(bits, dtype=np.uint8)
-
-    remainder = len(bits) % bits_per_symbol
-
-    if remainder == 0:
-        return bits
-
-    padding = bits_per_symbol - remainder
-
-    zeros = np.zeros(
-        padding,
-        dtype=np.uint8
-    )
-
-    return np.concatenate((bits, zeros))
-
-
-#########################################################
-# Remove Padding
-#########################################################
-
-def remove_padding(bits, original_length):
-    """
-    Remove padded bits.
-    """
-
-    return bits[:original_length]
-
-
-#########################################################
-# Execution Timer
-#########################################################
-
-class Timer:
-
-    def __init__(self):
-
-        self.start_time = None
-
-    def start(self):
-
-        self.start_time = time.time()
-
-    def stop(self):
-
-        return time.time() - self.start_time
-
-
-#########################################################
-# Progress Bar
-#########################################################
-
-def progress(current, total):
-
-    percent = (current / total) * 100
-
-    print(
-        f"\rProgress : {percent:6.2f}%",
-        end=""
-    )
-
-
-#########################################################
-# Binary String
-#########################################################
-
-def bits_to_string(bits):
-    """
-    Convert bit array to printable string.
-    """
-
-    return "".join(str(int(b)) for b in bits)
-
-
-#########################################################
-# Error Percentage
-#########################################################
-
-def error_percentage(tx_bits, rx_bits):
-    """
-    Percentage of incorrect bits.
-    """
-
-    minimum = min(len(tx_bits), len(rx_bits))
-
-    tx = np.asarray(tx_bits[:minimum])
-
-    rx = np.asarray(rx_bits[:minimum])
-
-    return (
-        np.sum(tx != rx) /
-        minimum
-    ) * 100
-
-
-#########################################################
-# Simulation Summary
-#########################################################
-
-def simulation_summary():
-
-    print("\n====================================")
-
-    print("Adaptive Image Transmission System")
-
-    print("------------------------------------")
-
-    print("Supported Modulation Schemes")
-
-    print(" • BPSK")
-
-    print(" • QPSK")
-
-    print(" • 16-QAM")
-
-    print(" • 64-QAM")
-
-    print("------------------------------------")
-
-    print("Channel")
-
-    print(" • AWGN")
-
-    print(" • Rayleigh")
-
-    print("------------------------------------")
-
-    print("Performance Metrics")
-
-    print(" • BER")
-
-    print(" • Throughput")
-
-    print(" • Image Reconstruction")
-
-    print("====================================\n")
-
-
-#########################################################
-# Module Test
-#########################################################
-
-if __name__ == "__main__":
-
-    set_seed()
-
-    simulation_summary()
-
-    bits = np.random.randint(0, 2, 17)
-
-    print("Original Length :", len(bits))
-
-    padded = pad_bits(bits, 6)
-
-    print("Padded Length :", len(padded))
-
-    print("Signal Power :", signal_power(np.array([1, -1, 1, -1])))
-
-    print("Linear (10 dB) :", db_to_linear(10))
-
-    print("dB (10) :", linear_to_db(10))
+    mse = compute_mse(original, received)
+    if mse == 0:
+        return 100.0
+    return 10.0 * np.log10((max_val ** 2) / mse)
+
+
+def bytes_to_bits(byte_array):
+    """Convert a numpy uint8 array (e.g. flattened image) into a bit array (0/1)."""
+    return np.unpackbits(byte_array.astype(np.uint8))
+
+
+def bits_to_bytes(bit_array):
+    """Convert a bit array (0/1) back into a numpy uint8 byte array."""
+    n_bits = len(bit_array)
+    pad = (-n_bits) % 8
+    if pad:
+        bit_array = np.concatenate([bit_array, np.zeros(pad, dtype=np.uint8)])
+    return np.packbits(bit_array.astype(np.uint8))
+
+
+def pad_bits_to_multiple(bits, k):
+    """Zero-pad a bit array so its length is a multiple of k (bits per symbol)."""
+    n = len(bits)
+    pad = (-n) % k
+    if pad:
+        bits = np.concatenate([bits, np.zeros(pad, dtype=np.uint8)])
+    return bits, pad
